@@ -1,0 +1,523 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: Provisions an Highly available ECS stack with docker image specified
+
+Parameters:
+
+  # CertificateArn:
+  #   Type: String
+  #   AllowedPattern: '^.+$'
+  #   Description: ARN of an existing certificate which will be attached to the ALB created by the stack, to serve HTTPS traffic (mandatory).
+
+  DockerImage:
+    Type: String
+    Default: jenkins/jenkins:lts
+    AllowedPattern: '^.+$'
+    Description: Docker image used in the ECS task definition. Override the default to use a custom image (mandatory).
+
+  HostName:
+    AllowedPattern: '[a-zA-Z0-9-]*'
+    Description: hostname you would like for the load-balancer url and certificate, in combination with HostedZone -- hostname.hostedzone
+    Default: jenkins
+    Type: String
+
+  HostedZone:
+    Description: The DNS name of an existing Amazon Route 53 hosted zone
+    Default: pfs.io
+    Type: String
+
+  CustomerName:
+    AllowedPattern: '[a-zA-Z0-9-]*'
+    Description: Customer Name
+    Type: String
+
+  DeploymentType:
+    AllowedValues:
+      - etdc
+      - pfsc
+      - cis
+      - ssvc
+    Default: etdc
+    Description: Deployment Type
+    Type: String
+
+  DeploymentNumber:
+    Default: 1
+    Description: Deployment number (i.e. 1, 2, 3, etc)
+    Type: Number
+
+  EnvironmentType:
+    AllowedValues:
+      - bld
+      - dem
+      - dev
+      - prd
+      - qac
+      - tst
+      - int
+      - evl
+      - trn
+      - uat
+      - stg
+      - all
+    Description: Environment Type i.e. dev, tst, prd.
+    Type: String
+
+  HealthCheckPath:
+    Description: The location of the health check path for the load-balancer health check
+    Default: /login
+    Type: String
+
+  ContainerPath:
+    Type: String
+    Default: jenkins_home
+    Description: The path for the docker image mount.  will be mounted at /var/
+
+  VPCCidr:
+    AllowedPattern: ^$|^((\d{1,3})\.){3}\d{1,3}\/\d{1,2}$
+    Description: IMPORTANT - Enter a CIDR here if you want to create a new VPC. This VPC will be created from the standard VPC template. Leave this field blank and enter existing VPC and Subnets below to use an existing VPC
+    Default: 10.0.0.0/22
+    Type: String
+
+  VPCExisting:
+    Description: If leaving VPCCidr blank, enter an existing VPC Id for this environment. If entering a CIDR in VPCCidr then this field will be ignored
+    Type: String
+    AllowedPattern: '(^$|(?:vpc-[0-9a-f]{8}|vpc-[0-9a-f]{17}|)$)'
+
+  VPCSubnetELB1:
+    Description: If leaving VPCCidr blank, enter an existing subnet-id 'subnet-nnnn' for the load-balancer.  If entering a CIDR in VPCCidr then this field will be ignored
+    Type: String
+    AllowedPattern: '(^$|(?:subnet-[0-9a-f]{8}|subnet-[0-9a-f]{17}|)$)'
+
+  VPCSubnetELB2:
+    Description: If leaving VPCCidr blank, enter an existing subnet-id 'subnet-nnnn' for the load-balancer.  If entering a CIDR in VPCCidr then this field will be ignored
+    Type: String
+    AllowedPattern: '(^$|(?:subnet-[0-9a-f]{8}|subnet-[0-9a-f]{17}|)$)'
+
+  VPCSubnetWeb1:
+    Description: If leaving VPCCidr blank, enter an existing subnet-id 'subnet-nnnn' for the Cluster.  If entering a CIDR in VPCCidr then this field will be ignored
+    Type: String
+    AllowedPattern: '(^$|(?:subnet-[0-9a-f]{8}|subnet-[0-9a-f]{17}|)$)'
+
+  VPCSubnetWeb2:
+    Description: If leaving VPCCidr blank, enter an existing subnet-id 'subnet-nnnn' for the Cluster.  If entering a CIDR in VPCCidr then this field will be ignored
+    Type: String
+    AllowedPattern: '(^$|(?:subnet-[0-9a-f]{8}|subnet-[0-9a-f]{17}|)$)'
+
+  GithubToken:
+    Description: Stores a secret in SSM Secretsmanager for use within Jenkins
+    Type: String
+    NoEcho: true
+
+  GithubUsername:
+    Description: Stores a username in SSM Secretsmanager for use within Jenkins
+    Type: String
+    # NoEcho: true
+
+  SignalSciencesSecretAccessKeyProd:
+    Description: Stores a secret in SSM Secretsmanager for use within Jenkins - get the value from keeper
+    Type: String
+    NoEcho: true
+
+  SignalSciencesAccessKeyIdProd:
+    Description: Stores a username in SSM Secretsmanager for use within Jenkins - get the value from keeper
+    Type: String
+    # NoEcho: true
+
+  SignalSciencesSecretAccessKeyDev:
+    Description: Stores a secret in SSM Secretsmanager for use within Jenkins - get the value from keeper
+    Type: String
+    NoEcho: true
+
+  SignalSciencesAccessKeyIdDev:
+    Description: Stores a username in SSM Secretsmanager for use within Jenkins - get the value from keeper
+    Type: String
+    # NoEcho: true
+
+
+Conditions:
+
+  emptyVPCCidr: !Equals [ !Ref VPCCidr, '' ]
+  notemptyVPCCidr: !Not [ !Equals [ !Ref VPCCidr, '' ]]
+
+Resources:
+
+  VPCStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: notemptyVPCCidr
+    Properties:
+      Parameters:
+        VPCCidr: !Ref VPCCidr
+        CustomerName: !Ref CustomerName
+        DeploymentType: !Ref DeploymentType
+        DeploymentNumber: !Ref DeploymentNumber
+        EnvironmentType: !Ref EnvironmentType
+        paramVpcflowlogsEnable: "True"
+        paramPublicWebAccess: "True"
+        paramPublicDBAccess: "True"
+      TemplateURL: !Ref https://docs.aws.amazon.com/codebuild/latest/userguide/cloudformation-vpc-template.html
+
+  NatEIP1:
+    Type: AWS::EC2::EIP
+    # Condition: HasPrivateURL
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub EIP 1 ${CustomerName} ${EnvironmentType} ${DeploymentNumber}
+        - Key: Cloudformation-Stack
+          Value: !Sub ${AWS::StackName}
+
+  NatGw1:
+    Type: AWS::EC2::NatGateway
+    # Condition: HasPrivateURL
+    Properties:
+      AllocationId: !GetAtt NatEIP1.AllocationId
+      ConnectivityType: public
+      SubnetId: !If [ emptyVPCCidr, !Ref VPCSubnetELB1, !GetAtt VPCStack.Outputs.SubnetELB1 ]
+      Tags:
+        - Key: Name
+          Value: !Sub NAT GW ${CustomerName} ${EnvironmentType} ${DeploymentNumber}
+
+  NatRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties: 
+      Tags: 
+        - Key: Name
+          Value: !Sub NAT RouteTable1 ${CustomerName} ${EnvironmentType} ${DeploymentNumber}
+      VpcId: !If [ emptyVPCCidr, !Ref VPCExisting, !GetAtt VPCStack.Outputs.VPC ]
+
+  NatRoute:
+    Type: AWS::EC2::Route
+    Properties: 
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGw1
+      RouteTableId: !Ref NatRouteTable1
+  
+  NatSubnetRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: 
+      RouteTableId: !Ref NatRouteTable1
+      SubnetId: !If [ emptyVPCCidr, !Ref VPCSubnetWeb1, !GetAtt VPCStack.Outputs.SubnetWeb1 ]
+
+  NatSubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: 
+      RouteTableId: !Ref NatRouteTable1
+      SubnetId: !If [ emptyVPCCidr, !Ref VPCSubnetWeb2, !GetAtt VPCStack.Outputs.SubnetWeb2 ]
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+        - !If [ emptyVPCCidr, !Ref VPCSubnetELB1, !GetAtt VPCStack.Outputs.SubnetELB1 ]
+        - !If [ emptyVPCCidr, !Ref VPCSubnetELB2, !GetAtt VPCStack.Outputs.SubnetELB2 ]
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub sg ${CustomerName}-${HostName}-${EnvironmentType}-${DeploymentNumber} Load Balancer
+      GroupDescription: !Sub Security group for load balancer ${CustomerName}-${HostName}-${EnvironmentType}-${DeploymentNumber}
+      VpcId: !If [ emptyVPCCidr, !Ref VPCExisting, !GetAtt VPCStack.Outputs.VPC ]
+      SecurityGroupIngress:
+        -
+          Description: Whitelist the required
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 10.0.0.0/32
+
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          DestinationSecurityGroupId: !Ref ECSSecurityGroup
+
+  LoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Certificates:
+        - CertificateArn: !Ref Certificate
+      DefaultActions:
+        - Type: forward
+          ForwardConfig:
+            TargetGroups:
+              - TargetGroupArn: !Ref ECSTargetGroup
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub ${HostName}.${HostedZone}
+          # - IfProd: !If [ CreateProdResources, '', !FindInMap [ EnvironmentTypePrefix, !Ref EnvironmentType, Name ]]
+      DomainValidationOptions:
+        - ValidationDomain: !Ref HostedZone
+          DomainName: !Sub ${HostName}.${HostedZone}
+              # - IfProd: !If [ CreateProdResources, '', !FindInMap [ EnvironmentTypePrefix, !Ref EnvironmentType, Name ]]
+      Tags:
+        - Key: Name
+          Value: !Sub ${HostName}.${HostedZone}
+              # - IfProd: !If [ CreateProdResources, '', !FindInMap [ EnvironmentTypePrefix, !Ref EnvironmentType, Name ]]
+        - Key: Client
+          Value: !Sub ${CustomerName}
+        - Key: Environment
+          Value: !Sub ${EnvironmentType}
+
+  ECSTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckPath: !Ref HealthCheckPath
+      Name: !Sub tg-${CustomerName}-${HostName}-${EnvironmentType}-${DeploymentNumber}
+      Port: 8080
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !If [ emptyVPCCidr, !Ref VPCExisting, !GetAtt VPCStack.Outputs.VPC ]
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 10
+
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${CustomerName} ${HostName} ${EnvironmentType} ECSSecurityGroup ${DeploymentNumber}
+      GroupDescription: !Sub Security group for ECS ${CustomerName} ${HostName} ${EnvironmentType} ECSSecurityGroup ${DeploymentNumber}
+      VpcId: !If [ emptyVPCCidr, !Ref VPCExisting, !GetAtt VPCStack.Outputs.VPC ]
+
+  ECSLoadBalancerSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      GroupId: !Ref ECSSecurityGroup
+      SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${CustomerName}-${HostName}-${EnvironmentType}-${DeploymentNumber}
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  ECSExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ECSExecutionRole-${AWS::Region}-${HostName}.${HostedZone}-${CustomerName}-${EnvironmentType}-${DeploymentNumber}
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  ECSTasksRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ECSTasksRole-${AWS::Region}-${HostName}.${HostedZone}-${CustomerName}-${EnvironmentType}-${DeploymentNumber}
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+      Policies:
+        - PolicyName: !Sub ECSTasksRole-${AWS::Region}-${HostName}.${HostedZone}-${CustomerName}-${EnvironmentType}-${DeploymentNumber}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - elasticfilesystem:ClientMount
+                  - elasticfilesystem:ClientWrite
+                Resource: !Sub arn:${AWS::Partition}:elasticfilesystem:${AWS::Region}:${AWS::AccountId}:file-system/${FileSystemResource}
+              -
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: 
+                  - !Ref JenkinsSecret
+              -
+                Effect: Allow
+                Action:
+                  - secretsmanager:ListSecrets
+                Resource: '*'
+              -
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource: arn:aws:s3:::ecs-jenkins/*
+ 
+  ECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      # Family: !Sub ecs-task-${HostName}.${HostedZone}
+      Cpu: 1024
+      Memory: 4096
+      NetworkMode: awsvpc
+      TaskRoleArn: !Ref ECSTasksRole
+      ExecutionRoleArn: !GetAtt ECSExecutionRole.Arn
+      RequiresCompatibilities:
+        - FARGATE
+        - EC2
+      ContainerDefinitions:
+        - Name: !Sub ${CustomerName}-${HostName}-${EnvironmentType}-container-${DeploymentNumber}
+          Image: !Ref DockerImage
+          HealthCheck:
+            Command:
+              - "CMD-SHELL"
+              - "curl -sfI http://127.0.0.1:8080/login || exit 1"
+            Interval: 30
+            Retries: 3
+            StartPeriod: 300
+            Timeout: 5
+          PortMappings:
+            - ContainerPort: 8080
+          MountPoints:
+            - SourceVolume: ecs-home
+              ContainerPath: !Sub /var/${ContainerPath}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref CloudwatchLogsGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: !Sub ${HostName}.${HostedZone}
+      Volumes:
+        - Name: ecs-home
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref FileSystemResource
+            TransitEncryption: ENABLED
+            AuthorizationConfig:
+              AccessPointId: !Ref AccessPointResource
+              IAM: ENABLED
+      Tags:
+        - Key: Name
+          Value: !Sub ${CustomerName}-${HostName}-${EnvironmentType}-${DeploymentNumber}
+
+  CloudwatchLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub ${CustomerName}-${HostName}-${EnvironmentType}-${DeploymentNumber}-logs
+      RetentionInDays: 30
+
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn: LoadBalancerListener
+    Properties:
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref ECSTaskDefinition
+      DesiredCount: 1
+      HealthCheckGracePeriodSeconds: 300
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 50
+        MaximumPercent: 200
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !If [ emptyVPCCidr, !Ref VPCSubnetWeb1, !GetAtt VPCStack.Outputs.SubnetWeb1 ]
+            - !If [ emptyVPCCidr, !Ref VPCSubnetWeb2, !GetAtt VPCStack.Outputs.SubnetWeb2 ]
+          SecurityGroups:
+            - !GetAtt ECSSecurityGroup.GroupId
+      PropagateTags: TASK_DEFINITION
+      ServiceName: !Sub ${CustomerName}-${HostName}-${EnvironmentType}-service-${DeploymentNumber}
+      LoadBalancers:
+        - ContainerName: !Sub ${CustomerName}-${HostName}-${EnvironmentType}-container-${DeploymentNumber}
+          ContainerPort: 8080
+          TargetGroupArn: !Ref ECSTargetGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${CustomerName}-${HostName}-${EnvironmentType}-${DeploymentNumber}
+
+  EFSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !If [ emptyVPCCidr, !Ref VPCExisting, !GetAtt VPCStack.Outputs.VPC ]
+      GroupDescription: Enable EFS access via port 2049
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
+
+  FileSystemResource:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      BackupPolicy:
+        Status: ENABLED
+      FileSystemTags:
+        - Key: Name
+          Value: !Sub ecs-home-${CustomerName}-${HostName}-${EnvironmentType}-${DeploymentNumber}
+        - Key: TechOps-Mission
+          Value: Critical
+
+  MountTargetResource1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystemResource
+      SubnetId: !If [ emptyVPCCidr, !Ref VPCSubnetWeb1, !GetAtt VPCStack.Outputs.SubnetWeb1 ]
+      SecurityGroups:
+        - !GetAtt EFSSecurityGroup.GroupId
+
+  MountTargetResource2:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystemResource
+      SubnetId: !If [ emptyVPCCidr, !Ref VPCSubnetWeb2, !GetAtt VPCStack.Outputs.SubnetWeb2 ]
+      SecurityGroups:
+        - !GetAtt EFSSecurityGroup.GroupId
+
+  AccessPointResource:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      AccessPointTags:
+        - Key: Name
+          Value: !Sub ecs-home-${CustomerName}-${HostName}-${EnvironmentType}-${DeploymentNumber}
+      FileSystemId: !Ref FileSystemResource
+      PosixUser:
+        Uid: '1000'
+        Gid: '1000'
+      RootDirectory:
+        CreationInfo:
+          OwnerGid: '1000'
+          OwnerUid: '1000'
+          Permissions: '755'
+        Path: '/'
+
+  JenkinsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub ${CustomerName}-${HostName}-${EnvironmentType}-secret-${DeploymentNumber}
+      Name: !Sub ${CustomerName}-${HostName}-${EnvironmentType}-secret-${DeploymentNumber}
+      SecretString: !Sub '${GithubToken}'
+      Tags:
+        - Key: jenkins:credentials:type
+          Value: usernamePassword
+        - Key: jenkins:credentials:username
+          Value: !Sub ${GithubUsername}
+
+
+Outputs:
+  LoadBalancerDNSName:
+    Value: !GetAtt LoadBalancer.DNSName
+
+  Hostname:
+    Value: !Sub ${HostName}.${HostedZone}
+
+  LoadBalancerUrl:
+    Value: !Sub
+      - https://${Url}
+      - Url: !GetAtt LoadBalancer.DNSName
