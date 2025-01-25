@@ -1,0 +1,350 @@
+SET MARKUP HTML ON
+
+set feedback off
+set serverout on
+set wrap on
+set pages 300
+set lines 150
+col file_name for a50
+col name for a50
+col member for a50
+col file_id for a5
+col "Percent Used" for a20
+col segment_name for a30
+col tablespace_name for a30
+col STATUS for a16
+col owner for a20
+col table_name for a35
+col index_name for a35
+col username format a25
+col default_tablespace format a25
+col temporary_tablespace format a25
+SET MARKUP HTML ON SPOOL ON ENTMAP OFF -
+head '<title> DAILY HEALTH CHECK </title> -
+<style type="text/css"> -
+table {background: #FFFFE0; font-size: 99%;} -
+  th { background-color: Darkblue; color:White} -
+  td { padding: 0px; } -
+</style>' -
+body 'text=blue bgcolor=FAFAD2 align=left' -
+table 'align=center width=99% border=3 bordercolor=Red bgcolor=grey'
+
+SPOOL Database_Health_Report.html
+
+
+
+PROMPT
+PROMPT
+PROMPT DATABASE REPORT DATE
+PROMPT ====================
+SELECT TO_CHAR(SYSDATE,'DD-Mon-YYYY HH24:MI:SS') FROM dual;   
+
+PROMPT
+PROMPT
+PROMPT DATABASE STATUS
+PROMPT ================
+select name, open_mode, log_mode from v$database;
+
+
+PROMPT
+PROMPT
+PROMPT INSTANCE STATUS
+PROMPT ===============
+select INSTANCE_NAME,STATUS,DATABASE_STATUS,ACTIVE_STATE as STATE,STARTUP_TIME as STARTTIME , Logins from v$instance;
+
+
+PROMPT
+PROMPT
+PROMPT COUNT OF TABLESPACES
+PROMPT =====================
+select count(*) AS "No. of tablespaces" from v$tablespace;
+
+
+
+PROMPT
+
+PROMPT
+PROMPT
+PROMPT TABLESPACE STATISTICS
+PROMPT ======================
+COL file_name FORMAT A45
+select tablespace_name ,  file_name, autoextensible  from dba_data_files order by tablespace_name,file_name;
+
+
+PROMPT
+PROMPT
+PROMPT TABLESPACE USED  FREE SPAPCE
+PROMPT ==============================
+select
+   fs.tablespace_name                          "Tablespace",
+   (df.totalspace - fs.freespace)              "Used MB",
+   fs.freespace                                "Free MB",
+   df.totalspace                               "Total MB",
+   round(100 * (fs.freespace / df.totalspace)) "Pct. Free"
+from
+   (select
+      tablespace_name,
+      round(sum(bytes) / 1048576) TotalSpace
+   from
+      dba_data_files
+   group by
+      tablespace_name
+   ) df,
+   (select
+      tablespace_name,
+      round(sum(bytes) / 1048576) FreeSpace
+   from
+      dba_free_space
+   group by
+      tablespace_name
+   ) fs
+where
+   df.tablespace_name = fs.tablespace_name;
+   
+PROMPT
+PROMPT
+PROMPT TABLESPACE TYPE
+PROMPT ===============   
+select name , bigfile  from v$tablespace;
+
+
+PROMPT
+PROMPT
+PROMPT DATABASE DEFAULT TEMP TABLESPACE
+PROMPT ================================
+
+SELECT property_name,property_value FROM DATABASE_PROPERTIES where PROPERTY_NAME='DEFAULT_TEMP_TABLESPACE';
+
+
+
+PROMPT
+PROMPT
+PROMPT TEMP AUTOEXTEND DETAILS
+PROMPT =======================
+select tablespace_name,file_name,AUTOEXTENSIBLE from dba_temp_files;
+
+PROMPT
+PROMPT
+PROMPT TEMP TABLESPACE USED FREE
+PROMPT ==========================
+SELECT tf.tablespace_name,
+       tf.file_name,
+       tf.size_mb,
+       f.free_mb,
+       tf.size_mb - f.free_mb as USED,
+       tf.max_size_mb,
+       f.free_mb + (tf.max_size_mb - tf.size_mb) AS max_free_mb
+FROM   (SELECT file_id,
+               file_name,
+               tablespace_name,
+               TRUNC(bytes/1024/1024) AS size_mb,
+               TRUNC(GREATEST(bytes,maxbytes)/1024/1024) AS max_size_mb
+        FROM   dba_temp_files) tf,
+       (SELECT TRUNC(SUM(bytes)/1024/1024) AS free_mb,
+               file_id
+        FROM dba_free_space
+        GROUP BY file_id) f
+WHERE  tf.file_id = f.file_id (+)
+ORDER BY tf.tablespace_name,
+         tf.file_name;
+
+PROMPT
+PROMPT
+PROMPT TOTAL DATABASE USAGE
+PROMPT =====================
+select (select sum(bytes/1048576) from dba_data_files) "Data Mb",
+(select NVL(sum(bytes/1048576),0) from dba_temp_files) "Temp Mb",
+(select sum(bytes/1048576)*max(members) from v$log) "Redo Mb",
+(select sum(bytes/1048576) from dba_data_files) +
+(select NVL(sum(bytes/1048576),0) from dba_temp_files) +
+(select sum(bytes/1048576)*max(members) from v$log) "Total Mb"
+from dual;
+
+
+PROMPT
+PROMPT
+PROMPT DB PHYSICAL SIZE
+PROMPT ==================
+select sum(bytes/1024/1024) "DB Physical Size(MB)" from dba_data_files;
+
+
+PROMPT
+PROMPT
+PROMPT DB ACUTAL SIZE in SEGMENTS Usage 
+PROMPT ================================
+select sum(bytes/1024/1024) "DB Actual Size(MB)" from dba_segments;
+
+
+PROMPT
+PROMPT
+PROMPT DATABASE GROWTH PATTERN
+PROMPT ==========================
+SELECT
+(select min(creation_time) from v$datafile) "Create Time",
+(select name from v$database) "Database Name",
+ROUND((SUM(USED.BYTES) / 1024 / 1024 ),2) || ' MB' "Database Size",
+ROUND((SUM(USED.BYTES) / 1024 / 1024 ) - ROUND(FREE.P / 1024 / 1024 ),2) || ' MB' "Used Space",
+ROUND(((SUM(USED.BYTES) / 1024 / 1024 ) - (FREE.P / 1024 / 1024 )) / ROUND(SUM(USED.BYTES) / 1024 / 1024 ,2)*100,2) || '% MB' "Used in %",
+ROUND((FREE.P / 1024 / 1024 ),2) || ' MB' "Free Space",
+ROUND(((SUM(USED.BYTES) / 1024 / 1024 ) - ((SUM(USED.BYTES) / 1024 / 1024 ) - ROUND(FREE.P / 1024 / 1024 )))/ROUND(SUM(USED.BYTES) / 1024 / 1024,2 )*100,2) || '% MB' "Free in %",
+ROUND(((SUM(USED.BYTES) / 1024 / 1024 ) - (FREE.P / 1024 / 1024 ))/(select sysdate-min(creation_time) from v$datafile),2) || ' MB' "Growth DAY",
+ROUND(((SUM(USED.BYTES) / 1024 / 1024 ) - (FREE.P / 1024 / 1024 ))/(select sysdate-min(creation_time) from v$datafile)/ROUND((SUM(USED.BYTES) / 1024 / 1024 ),2)*100,3) || '% MB' "Growth DAY in %",
+ROUND(((SUM(USED.BYTES) / 1024 / 1024 ) - (FREE.P / 1024 / 1024 ))/(select sysdate-min(creation_time) from v$datafile)*7,2) || ' MB' "Growth WEEK",
+ROUND((((SUM(USED.BYTES) / 1024 / 1024 ) - (FREE.P / 1024 / 1024 ))/(select sysdate-min(creation_time) from v$datafile)/ROUND((SUM(USED.BYTES) / 1024 / 1024 ),2)*100)*7,3) || '% MB' "Growth WEEK in %"
+FROM    (SELECT BYTES FROM V$DATAFILE
+UNION ALL
+SELECT BYTES FROM V$LOG) USED,
+(SELECT SUM(BYTES) AS P FROM DBA_FREE_SPACE) FREE
+GROUP BY FREE.P;
+		 
+
+PROMPT
+PROMPT
+PROMPT BLOCKING QUERY
+PROMPT ==============
+PROMPT ****If no rows returned means no bocking sessions on database*******
+select s1.username || '@' || s1.machine|| ' ( SID=' || s1.sid || ' )  is blocking '|| s2.username || '@' || s2.machine || ' ( SID=' || s2.sid || ' ) ' AS blocking_status from v$lock l1, v$session s1, v$lock l2, v$session s2 where s1.sid=l1.sid and s2.sid=l2.sid and l1.BLOCK=1 and l2.request > 0 and l1.id1 = l2.id1 and l2.id2 = l2.id2;
+
+PROMPT
+PROMPT
+PROMPT BLOCKER AND WAITER
+PROMPT ==================
+PROMPT ****If no rows returned means no blocker and waiting sessions on database******
+Select sid , decode(block,0,'NO','YES') Blocker , decode (request ,0,'NO','YES')WAITER from v$lock where request>0 or block>0 order by block desc;
+
+PROMPT
+PROMPT
+PROMPT LOCKS
+PROMPT =====
+PROMPT ****If no rows returned means no LOCKS on database*******
+SELECT
+   inst_id,
+   sid sess,
+   (select sql_hash_value from gV$session s where s.sid=lk.sid and s.inst_id = lk.inst_id) SQL_HASH_VALUE,
+   ctime, id1, id2, trim(lmode) lmode, request, type,
+   (select status from gv$session vs where vs.sid = lk.sid and vs.inst_id = lk.inst_id) SessStatus,
+   (select object_name from dba_objects where object_id = id1) obj_locked,
+   DECODE(request,0,'Holder: ','Waiter: ') position
+FROM gV$LOCK lk
+WHERE id1 IN (SELECT id1 FROM gv$LOCK WHERE lmode = 0)
+ORDER BY id1,request;
+
+PROMPT
+PROMPT
+PROMPT NUMBER OF CONNECTED SESSIONS
+PROMPT =============================
+select
+       substr(a.spid,1,9) pid,
+       substr(b.sid,1,5) sid,
+       status,
+       TO_CHAR(logon_time,'DD-Mon-YYYY HH24:MI:SS'),
+       substr(b.serial#,1,5) ser#,
+       substr(b.machine,1,6) box,
+       substr(b.username,1,10) username,
+       substr(b.osuser,1,8) os_user,
+       substr(b.program,1,30) program
+from v$session b, v$process a
+where
+b.paddr = a.addr
+and type='USER'
+order by status;
+
+PROMPT
+PROMPT
+PROMPT NO OF USER CONNECTED
+PROMPT =====================
+select count(distinct username) "No. of users Connected" from v$session where username is not null;
+
+
+
+PROMPT
+PROMPT
+PROMPT NO OF SESSIONS CONNECTED
+PROMPT =========================
+Select count(*) AS "No of Sessions connected" from v$session where username is not null;
+
+
+
+PROMPT
+PROMPT
+PROMPT PROCESS and SESSSIONS UTILISATION
+PROMPT =================================
+select
+       RESOURCE_NAME,
+       CURRENT_UTILIZATION,
+       MAX_UTILIZATION,
+       INITIAL_ALLOCATION,
+       LIMIT_VALUE
+       from v$resource_limit 
+where 
+RESOURCE_NAME in ('sessions','processes');
+
+
+PROMPT
+PROMPT
+PROMPT REDO LOG SIZES and GROUPS
+PROMPT =========================
+select group#,thread#,sequence#,bytes/1024/1024 "size in MB",members from v$log;
+
+
+PROMPT
+PROMPT
+PROMPT ARCHIVE UTILISATION
+PROMPT ===================
+select thread#, trunc(completion_time) as "date", to_char(completion_time,'Dy') as "Day", count(1) as "total",
+sum(decode(to_char(completion_time,'HH24'),'00',1,0)) as "h00",
+sum(decode(to_char(completion_time,'HH24'),'01',1,0)) as "h01",
+sum(decode(to_char(completion_time,'HH24'),'02',1,0)) as "h02",
+sum(decode(to_char(completion_time,'HH24'),'03',1,0)) as "h03",
+sum(decode(to_char(completion_time,'HH24'),'04',1,0)) as "h04",
+sum(decode(to_char(completion_time,'HH24'),'05',1,0)) as "h05",
+sum(decode(to_char(completion_time,'HH24'),'06',1,0)) as "h06",
+sum(decode(to_char(completion_time,'HH24'),'07',1,0)) as "h07",
+sum(decode(to_char(completion_time,'HH24'),'08',1,0)) as "h08",
+sum(decode(to_char(completion_time,'HH24'),'09',1,0)) as "h09",
+sum(decode(to_char(completion_time,'HH24'),'10',1,0)) as "h10",
+sum(decode(to_char(completion_time,'HH24'),'11',1,0)) as "h11",
+sum(decode(to_char(completion_time,'HH24'),'12',1,0)) as "h12",
+sum(decode(to_char(completion_time,'HH24'),'13',1,0)) as "h13",
+sum(decode(to_char(completion_time,'HH24'),'14',1,0)) as "h14",
+sum(decode(to_char(completion_time,'HH24'),'15',1,0)) as "h15",
+sum(decode(to_char(completion_time,'HH24'),'16',1,0)) as "h16",
+sum(decode(to_char(completion_time,'HH24'),'17',1,0)) as "h17",
+sum(decode(to_char(completion_time,'HH24'),'18',1,0)) as "h18",
+sum(decode(to_char(completion_time,'HH24'),'19',1,0)) as "h19",
+sum(decode(to_char(completion_time,'HH24'),'20',1,0)) as "h20",
+sum(decode(to_char(completion_time,'HH24'),'21',1,0)) as "h21",
+sum(decode(to_char(completion_time,'HH24'),'22',1,0)) as "h22",
+sum(decode(to_char(completion_time,'HH24'),'23',1,0)) as "h23"
+from
+v$archived_log
+where first_time > trunc(sysdate-10)
+and dest_id = (select dest_id from V$ARCHIVE_DEST_STATUS where status='VALID' and type='LOCAL')
+group by thread#, trunc(completion_time), to_char(completion_time, 'Dy') order by 2,1;
+
+PROMPT
+PROMPT
+PROMPT ARCHIVE GENERATION PATTERN SIZE
+PROMPT ================================
+
+select THREAD#, trunc(completion_time) as "DATE"
+, count(1) num
+, trunc(sum(blocks*block_size)/1024/1024/1024) as GB
+, trunc(sum(blocks*block_size)/1024/1024) as MB
+, sum(blocks*block_size)/1024 as KB
+from v$archived_log
+where first_time > trunc(sysdate-10)
+and dest_id = (select dest_id from V$ARCHIVE_DEST_STATUS where status='VALID' and type='LOCAL')
+group by thread#, trunc(completion_time)
+order by 2,1
+;
+
+PROMPT
+PROMPT
+PROMPT DATABASE SCHEMA STATISTCIS
+PROMPT ==========================
+select owner, min(last_analyzed) as leastdate,max(last_analyzed) as highestdate from dba_tables group by owner order by 1;
+
+Spool off
+set markup html off
+exit;
