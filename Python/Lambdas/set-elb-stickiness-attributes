@@ -1,0 +1,89 @@
+import boto3
+import json
+import logging
+import string
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+def get_target_group_by_tags(elbv2_client, tags):
+    try:
+        # Describe all target groups
+        response = elbv2_client.describe_target_groups()
+        target_groups = response['TargetGroups']
+        
+        # Search for target groups that match the specified tags
+        matching_target_groups = []
+        for target_group in target_groups:
+            response = elbv2_client.describe_tags(ResourceArns=[target_group['TargetGroupArn']])
+            target_group_tags = response['TagDescriptions'][0]['Tags']
+            
+            if all(tag in target_group_tags for tag in tags):
+                matching_target_groups.append(target_group)
+        
+        return matching_target_groups
+    
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        return None
+        
+def lambda_handler(event, context):
+    elbv2_client = boto3.client('elbv2')
+    tags_to_search = [{'Key': 'elasticbeanstalk:environment-name', 'Value': 'Test'}]
+    
+    matching_target_groups = get_target_group_by_tags(elbv2_client, tags_to_search)
+    if matching_target_groups:
+        for target_group in matching_target_groups:
+            print(f"Matching Target Group: {target_group['TargetGroupArn']}")
+    else:
+        print("No matching Target Groups found.")
+    target_group_arn=target_group['TargetGroupArn']    
+        
+    stickiness_enabled = True
+    stickiness_type = 'app_cookie'  # Application-based cookie stickiness
+    if event['RequestType'] == 'Create':
+    # Update stickiness configuration
+        response = elbv2_client.modify_target_group_attributes(
+        TargetGroupArn=target_group_arn,
+        Attributes=[
+            {
+                'Key': 'stickiness.enabled',
+                'Value': str(stickiness_enabled).lower()
+            },
+            {
+                'Key': 'stickiness.type',
+                'Value': stickiness_type
+            },
+
+            {
+                    "Key": "stickiness.app_cookie.duration_seconds",
+                    "Value": "86500"
+            }
+        ]
+    )
+    else: # delete / update
+        response = elbv2_client.modify_target_group_attributes(
+        TargetGroupArn=target_group_arn,
+        Attributes=[
+            {
+                'Key': 'stickiness.enabled',
+                'Value': str(stickiness_enabled).lower()
+            },
+            {
+                'Key': 'stickiness.type',
+                'Value': stickiness_type
+            },
+
+            {
+                    "Key": "stickiness.app_cookie.duration_seconds",
+                    "Value": "86500"
+            }
+        ]
+    )   
+    logger.info('got event {}'.format(event))
+    responseData = {}
+    logger.info('responseData {}'.format(responseData))
+      
+    return {
+        'statusCode': 200,
+        'body': 'Stickiness configuration updated to application-based cookie successfully.'
+    }
