@@ -7,8 +7,8 @@
 # Arguments: -a AWS_ACCESS_KEY_ID - Mandatory
 #    -s AWS_SECRET_ACCESS_KEY - Mandatory
 #
-# Creation date: 26-June-2020
-# Last modified date: 29-June-2030
+# Creation date: 26-June-2024
+# Last modified date: 29-June-2025
 ################################################################################################################################
 
 # Welcome message
