@@ -1,0 +1,49 @@
+{
+    "Rules": [
+        {
+            "ID": "TransitionOldLogsToGlacier",
+            "Filter": {
+                "Prefix": "instanceLogs/"
+            },
+            "Status": "Enabled",
+            "Transitions": [
+                {
+                    "Days": 30,
+                    "StorageClass": "GLACIER"
+                }
+            ],
+            "Expiration": {
+                "Days": 180
+            },
+            "NoncurrentVersionExpiration": {
+                "NoncurrentDays": 180
+            }
+        },
+        {
+            "ID": "BackupLogsManagement",
+            "Filter": {
+                "Prefix": "InstanceLogsBackup/"
+            },
+            "Status": "Enabled",
+            "Transitions": [
+                {
+                    "Days": 60,
+                    "StorageClass": "GLACIER"
+                }
+            ],
+            "Expiration": {
+                "Days": 365
+            },
+            "NoncurrentVersionExpiration": {
+                "NoncurrentDays": 365
+            }
+        },
+        {
+            "ID": "ExpireIncompleteMultipartUploads",
+            "Status": "Enabled",
+            "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 7
+            }
+        }
+    ]
+}
